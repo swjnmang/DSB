@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alle Termine DSB</title>
+    
+    <!-- Polyfills -->
+    <script src="https://cdn.jsdelivr.net/npm/promise-polyfill@8/dist/polyfill.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/whatwg-fetch@3.6.2/dist/fetch.umd.min.js"></script>
+
+    <!-- FullCalendar -->
+    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            height: 100%;
+            width: 100%;
+        }
+
+        .column {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #333;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+
+        .column:last-child {
+            border-right: none;
+        }
+
+        h2 {
+            text-align: center;
+            color: #4da6ff;
+            margin: 10px 0;
+            font-size: 1.5em;
+        }
+
+        .calendar-wrapper {
+            flex: 1;
+            overflow: hidden; /* FullCalendar handles scroll */
+        }
+
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 2em;
+            color: #4da6ff;
+            background: rgba(0,0,0,0.7);
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 500;
+        }
+
+        #debug-log {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            max-height: 150px;
+            overflow-y: auto;
+            background: rgba(255, 0, 0, 0.9);
+            color: #ffffff;
+            font-family: monospace;
+            padding: 10px;
+            display: none; 
+            z-index: 1000;
+            border-top: 1px solid #fff;
+            font-size: 14px;
+        }
+
+        /* Design */
+        .fc-theme-standard td, .fc-theme-standard th { border-color: #333; }
+        .fc-list-day-cushion { 
+            background-color: #333 !important; 
+            padding: 4px 8px !important; /* Compact padding */
+        }
+        .fc-list-event:hover td { background-color: #444 !important; }
+        
+        /* Compact rows */
+        .fc-list-event td {
+            padding: 2px 8px !important;
+        }
+
+        /* Highlight today - Dark Green */
+        .fc-list-day.fc-day-today,
+        .fc-list-day.fc-day-today .fc-list-day-cushion {
+            background-color: #1b5e20 !important; /* Dark Green background for header */
+        }
+        .fc-list-day.fc-day-today .fc-list-day-text,
+        .fc-list-day.fc-day-today .fc-list-day-side-text {
+            color: #ffffff !important; /* White text */
+            font-weight: bold;
+        }
+
+        .fc-list-day.fc-day-today .fc-list-day-side-text::before {
+            content: "heute: ";
+        }
+        
+        .today-event td {
+            background-color: rgba(76, 175, 80, 0.2) !important; /* Light green background */
+            border-left: 6px solid #4caf50 !important; /* Thicker green border */
+        }
+        
+        .today-event .fc-list-event-title {
+            font-weight: bold;
+        }
+
+        .fc-toolbar-title { font-size: 1.8em !important; color: #4da6ff; }
+        .fc-button { background-color: #444 !important; border: none !important; }
+        
+        .fc-list-event-title { font-size: 1.1em; cursor: default; line-height: 1.2; }
+        .fc-list-event-time { font-size: 1.0em; color: #cccccc !important; font-weight: normal; }
+        .fc-list-empty { background-color: #121212; color: #888; font-size: 1.2em; }
+        
+        /* Weekend Styling */
+        .fc-list-day.fc-day-sat .fc-list-day-cushion,
+        .fc-list-day.fc-day-sun .fc-list-day-cushion {
+            background-color: #1a237e !important; /* Dark Blue for Weekend */
+        }
+
+        /* Past Events */
+        .past-event {
+            opacity: 0.5;
+        }
+
+        /* Spacing between days */
+        .fc-list-day th {
+            border-top: 10px solid #121212 !important;
+        }
+        
+        /* Hide toolbar since we have custom headers */
+        .fc-header-toolbar { display: none !important; }
+
+        /* Hide scrollbars */
+        .fc-scroller {
+            overflow-y: hidden !important; /* Try to avoid scrollbars initially */
+        }
+    </style>
+</head>
+<body>
+
+    <div id='loading'>Lade Kalender...</div>
+    
+    <div class="container">
+        <div class="column">
+            <h2>Diese Woche</h2>
+            <div id="calendar-this-week" class="calendar-wrapper"></div>
+        </div>
+        <div class="column">
+            <h2>Nächste Woche</h2>
+            <div id="calendar-next-week" class="calendar-wrapper"></div>
+        </div>
+    </div>
+
+    <div id='debug-log'></div>
+
+    <script>
+        function logError(msg, err) {
+            console.error(msg, err);
+            // Bewusst nur in der Browser-Konsole sichtbar, nicht auf dem Bildschirm –
+            // die rote Debug-Box bleibt für den Normalbetrieb ausgeblendet.
+            var logEl = document.getElementById('debug-log');
+            var errText = err ? (err.message || err.toString()) : '';
+            logEl.innerHTML += '<div><strong>' + msg + '</strong> ' + errText + '</div>';
+        }
+
+        // Fängt fehlgeschlagene <script src="..."> Ladevorgänge ab (z.B. wenn
+        // die Schul-Firewall cdn.jsdelivr.net blockiert). Ohne diesen Handler
+        // bleibt die Seite stumm bei "Lade Kalender..." hängen, weil
+        // FullCalendar dann undefined ist und der restliche Code nie läuft.
+        window.addEventListener('error', function(e) {
+            var target = e.target;
+            if (target && target.tagName === 'SCRIPT') {
+                logError('SCRIPT-FEHLER', 'Konnte nicht geladen werden: ' + target.src + ' (evtl. durch Schul-Firewall/Proxy blockiert)');
+                var loadingEl = document.getElementById('loading');
+                if (loadingEl) {
+                    loadingEl.innerHTML = '⚠ Bibliothek konnte nicht geladen werden.<br><small>' + target.src + '</small>';
+                }
+            }
+        }, true);
+
+        // Öffentliche Google-Kalender werden direkt über die Google Calendar API (JSON, v3)
+        // abgerufen. Google liefert dort saubere CORS-Header (Access-Control-Allow-Origin: *),
+        // d.h. es wird KEIN Proxy/Worker mehr benötigt. googleapis.com wird von Schul-Firewalls
+        // praktisch nie blockiert (im Gegensatz zu workers.dev, corsproxy.io etc.).
+        var GOOGLE_API_KEY = 'AIzaSyC4LmJ33nQi_dQHCCmotkK04_rEyJWOBCY';
+
+        var calendarConfigs = [
+            { id: '5a5mb1jceu56dhb023cctdcmt8@group.calendar.google.com', color: '#3f51b5' },
+            { id: 'dr23bb74v8vvnpn2sgmnrhdn4g@group.calendar.google.com', color: '#c0ca33' },
+            { id: 'nnhfbm1c9ug5jrcdf1riak0d7g@group.calendar.google.com', color: '#009688' },
+            { id: '026c2a7ab481be9dc10e2491c9576bfe3219099e18427ce684c89f9017c29c2e@group.calendar.google.com', color: '#e91e63' }
+        ];
+
+        // Holt eine URL mit Timeout, damit ein "hängender" Request nicht den gesamten
+        // Ladevorgang für immer blockiert. Bewusst OHNE AbortController gebaut: das
+        // DSB-Anzeigegerät nutzt eine alte Browser-Engine, die diese API nicht kennt
+        // (daher auch die fetch/Promise-Polyfills oben).
+        function fetchWithTimeout(url, timeoutMs) {
+            return new Promise(function(resolve, reject) {
+                var settled = false;
+                var timer = setTimeout(function() {
+                    if (settled) return;
+                    settled = true;
+                    reject(new Error('Timeout nach ' + timeoutMs + 'ms'));
+                }, timeoutMs);
+
+                fetch(url).then(function(res) {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    resolve(res);
+                }).catch(function(err) {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    reject(err);
+                });
+            });
+        }
+
+        function fetchCalendarEvents(calendarId, rangeStart, rangeEnd) {
+            var url = 'https://www.googleapis.com/calendar/v3/calendars/'
+                + encodeURIComponent(calendarId)
+                + '/events?key=' + encodeURIComponent(GOOGLE_API_KEY)
+                + '&timeMin=' + encodeURIComponent(rangeStart.toISOString())
+                + '&timeMax=' + encodeURIComponent(rangeEnd.toISOString())
+                + '&singleEvents=true&orderBy=startTime&maxResults=2500';
+
+            return fetchWithTimeout(url, 10000).then(function(res) {
+                if (!res.ok) {
+                    return res.text().then(function(body) {
+                        throw new Error('HTTP ' + res.status + ' – ' + body.substring(0, 200));
+                    });
+                }
+                return res.json();
+            });
+        }
+
+        // Globaler Cache für die Events
+        var cachedEvents = null;
+
+        function fitContent() {
+            var cal1El = document.getElementById('calendar-this-week');
+            var cal2El = document.getElementById('calendar-next-week');
+            
+            // Start mit maximaler Schriftgröße (28px wie gewünscht)
+            var fontSize = 28; 
+            cal1El.style.fontSize = fontSize + 'px';
+            cal2El.style.fontSize = fontSize + 'px';
+            
+            // Wenn Inhalt größer als Container, Schrift verkleinern (synchron für beide)
+            requestAnimationFrame(function() {
+                var scroller1 = cal1El.querySelector('.fc-scroller');
+                var scroller2 = cal2El.querySelector('.fc-scroller');
+                
+                if (!scroller1 || !scroller2) return;
+
+                // Solange EINER der beiden zu groß ist, verkleinern wir BEIDE
+                while ((scroller1.scrollHeight > scroller1.clientHeight || 
+                        scroller2.scrollHeight > scroller2.clientHeight) && 
+                       fontSize > 8) {
+                    fontSize -= 1;
+                    cal1El.style.fontSize = fontSize + 'px';
+                    cal2El.style.fontSize = fontSize + 'px';
+                }
+            });
+        }
+
+        function loadAllEvents() {
+            if (cachedEvents) return Promise.resolve(cachedEvents);
+
+            // Events für einen großen Zeitraum laden (-1 Monat bis +3 Monate)
+            var now = new Date();
+            var rangeStart = new Date(now);
+            rangeStart.setMonth(rangeStart.getMonth() - 1);
+            var rangeEnd = new Date(now);
+            rangeEnd.setMonth(rangeEnd.getMonth() + 3);
+
+            var promises = calendarConfigs.map(function(cfg, index) {
+                document.getElementById('loading').innerText = 'Lade Kalender ' + (index + 1) + '...';
+                logError('DEBUG', 'Lade Kalender ' + (index + 1) + ' via Google Calendar API...');
+
+                return fetchCalendarEvents(cfg.id, rangeStart, rangeEnd)
+                    .then(function(data) {
+                        var items = data.items || [];
+                        console.log('Kalender ' + (index+1) + ': ' + items.length + ' Events');
+                        logError('SUCCESS', 'Kalender ' + (index+1) + ': ' + items.length + ' Events geladen');
+                        return { status: 'fulfilled', items: items, color: cfg.color };
+                    })
+                    .catch(function(err) {
+                        var reason = err && err.message;
+                        console.error('Fehler beim Laden Kalender ' + (index+1) + ':', reason);
+                        logError('ERROR', 'Kalender ' + (index+1) + ' fehlgeschlagen: ' + reason);
+                        return { status: 'rejected', reason: err };
+                    });
+            });
+
+            return Promise.all(promises).then(function(results) {
+                if (results.every(function(r) { return r.status === 'rejected'; })) {
+                    // Kein einziger Kalender konnte geladen werden -> nach oben durchreichen,
+                    // damit eine sichtbare Fehlermeldung statt eines leeren "keine Termine" erscheint.
+                    throw new Error('Kein Kalender konnte geladen werden');
+                }
+
+                var allEvents = [];
+
+                results.forEach(function(result) {
+                    if (result.status === 'rejected') return;
+
+                    result.items.forEach(function(item) {
+                        if (!item.start) return;
+                        var isAllDay = !!item.start.date;
+                        var start = isAllDay
+                            ? new Date(item.start.date + 'T00:00:00')
+                            : new Date(item.start.dateTime);
+
+                        allEvents.push({
+                            title: item.summary || '(ohne Titel)',
+                            start: start,
+                            allDay: isAllDay,
+                            color: result.color
+                        });
+                    });
+                });
+
+                // Duplikate entfernen
+                // Wir filtern Events, die am gleichen Tag den gleichen Titel haben
+                var uniqueEvents = [];
+                var seen = new Set();
+
+                allEvents.forEach(function(ev) {
+                    // Erstelle einen eindeutigen Schlüssel aus Datum und Titel
+                    var d = ev.start;
+                    var dateStr = d.getFullYear() + '-' + (d.getMonth()+1) + '-' + d.getDate();
+                    var key = dateStr + '|' + ev.title;
+
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        uniqueEvents.push(ev);
+                    }
+                });
+
+                console.log('Final Events nach Deduplizierung: ' + uniqueEvents.length);
+                logError('SUCCESS', 'Final Events: ' + uniqueEvents.length);
+
+                cachedEvents = uniqueEvents;
+                return uniqueEvents;
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            var loadingEl = document.getElementById('loading');
+
+            if (typeof FullCalendar === 'undefined') {
+                loadingEl.innerHTML = '⚠ Kalender-Bibliothek (cdn.jsdelivr.net) konnte nicht geladen werden.<br><small>Bitte cdn.jsdelivr.net in der Schul-Firewall freigeben.</small>';
+                logError('FATAL', 'FullCalendar ist undefined – CDN vermutlich blockiert.');
+                return;
+            }
+
+            if (!GOOGLE_API_KEY || GOOGLE_API_KEY === 'DEIN_API_KEY_HIER') {
+                loadingEl.innerHTML = '⚠ Kein Google-API-Key eingetragen.<br><small>Siehe Kommentar bei GOOGLE_API_KEY im Code.</small>';
+                logError('FATAL', 'GOOGLE_API_KEY ist nicht gesetzt.');
+                return;
+            }
+
+            try {
+            // Datum berechnen
+            var today = new Date();
+            today.setHours(0,0,0,0);
+            
+            // Nächster Montag berechnen
+            var day = today.getDay(); // 0=Sun, 1=Mon
+            var diffToNextMonday = (8 - day) % 7;
+            if (diffToNextMonday === 0) diffToNextMonday = 7; 
+            
+            var nextMonday = new Date(today);
+            nextMonday.setDate(today.getDate() + diffToNextMonday);
+            
+            // Montag danach (für das Ende der 2. Woche)
+            var nextNextMonday = new Date(nextMonday);
+            nextNextMonday.setDate(nextMonday.getDate() + 7);
+
+            // Helper to format date
+            function formatDate(d) {
+                return d.getDate() + '.' + (d.getMonth()+1) + '.';
+            }
+
+            // Calculate end dates for display (Sunday)
+            var sundayThisWeek = new Date(nextMonday);
+            sundayThisWeek.setDate(sundayThisWeek.getDate() - 1);
+
+            var sundayNextWeek = new Date(nextNextMonday);
+            sundayNextWeek.setDate(sundayNextWeek.getDate() - 1);
+
+            // Update Headers
+            document.querySelector('.column:nth-child(1) h2').innerText = 'Diese Woche (' + formatDate(today) + ' - ' + formatDate(sundayThisWeek) + ')';
+            document.querySelector('.column:nth-child(2) h2').innerText = 'Nächste Woche (' + formatDate(nextMonday) + ' - ' + formatDate(sundayNextWeek) + ')';
+
+            // Kalender 1: Diese Woche (ab heute bis Sonntag)
+            var cal1El = document.getElementById('calendar-this-week');
+            var cal1 = new FullCalendar.Calendar(cal1El, {
+                initialView: 'listYear', // WICHTIG: listYear zeigt alle Events im validRange an
+                locale: 'de',
+                headerToolbar: false,
+                height: '100%',
+                validRange: {
+                    start: today,
+                    end: nextMonday
+                },
+                eventClassNames: function(arg) {
+                    var classes = [];
+                    var d = arg.event.start;
+                    var now = new Date();
+                    
+                    // Today check
+                    if (d.getDate() === now.getDate() && 
+                        d.getMonth() === now.getMonth() && 
+                        d.getFullYear() === now.getFullYear()) {
+                        classes.push('today-event');
+                        
+                        // Past check (only for today)
+                        if (d < now) {
+                            classes.push('past-event');
+                        }
+                    }
+                    return classes;
+                },
+                events: function(info, success, failure) {
+                    loadAllEvents().then(function(events) {
+                        success(events);
+                    }).catch(failure);
+                },
+                eventsSet: function() {
+                    fitContent();
+                },
+                windowResize: function() {
+                    fitContent();
+                }
+            });
+
+            // Kalender 2: Nächste Woche (Montag bis Sonntag)
+            var cal2El = document.getElementById('calendar-next-week');
+            var cal2 = new FullCalendar.Calendar(cal2El, {
+                initialView: 'listYear', // WICHTIG: listYear zeigt alle Events im validRange an
+                locale: 'de',
+                headerToolbar: false,
+                height: '100%',
+                validRange: {
+                    start: nextMonday,
+                    end: nextNextMonday
+                },
+                eventClassNames: function(arg) {
+                    var classes = [];
+                    var d = arg.event.start;
+                    var now = new Date();
+                    
+                    // Today check
+                    if (d.getDate() === now.getDate() && 
+                        d.getMonth() === now.getMonth() && 
+                        d.getFullYear() === now.getFullYear()) {
+                        classes.push('today-event');
+                        
+                        // Past check (only for today)
+                        if (d < now) {
+                            classes.push('past-event');
+                        }
+                    }
+                    return classes;
+                },
+                events: function(info, success, failure) {
+                    loadAllEvents().then(function(events) {
+                        success(events);
+                    }).catch(failure);
+                },
+                eventsSet: function() {
+                    fitContent();
+                },
+                windowResize: function() {
+                    fitContent();
+                }
+            });
+
+            loadingEl.style.display = 'block';
+
+            function showLoadFailure(err) {
+                logError("Fehler beim Laden:", err);
+                loadingEl.innerHTML = '⚠ Kalenderdaten konnten nicht geladen werden.<br><small>Proxy/Netzwerk vermutlich durch Schul-Firewall blockiert. Details unten.</small>';
+                loadingEl.style.display = 'block';
+            }
+
+            // Erst Daten laden, dann rendern
+            loadAllEvents().then(function() {
+                loadingEl.style.display = 'none';
+                cal1.render();
+                cal2.render();
+            }).catch(showLoadFailure);
+            } catch (fatalErr) {
+                logError('FATAL beim Initialisieren', fatalErr);
+                loadingEl.innerHTML = '⚠ Fehler beim Initialisieren.<br><small>' + (fatalErr && fatalErr.message ? fatalErr.message : fatalErr) + '</small>';
+            }
+        });
+    </script>
+</body>
+</html>
