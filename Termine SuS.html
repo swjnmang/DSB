@@ -266,12 +266,30 @@
         ];
 
         // Holt eine URL mit Timeout, damit ein "hängender" Request nicht den gesamten
-        // Ladevorgang für immer blockiert.
+        // Ladevorgang für immer blockiert. Bewusst OHNE AbortController gebaut: das
+        // DSB-Anzeigegerät nutzt eine alte Browser-Engine, die diese API nicht kennt
+        // (daher auch die fetch/Promise-Polyfills oben).
         function fetchWithTimeout(url, timeoutMs) {
-            var controller = new AbortController();
-            var timer = setTimeout(function() { controller.abort(); }, timeoutMs);
-            return fetch(url, { signal: controller.signal })
-                .finally(function() { clearTimeout(timer); });
+            return new Promise(function(resolve, reject) {
+                var settled = false;
+                var timer = setTimeout(function() {
+                    if (settled) return;
+                    settled = true;
+                    reject(new Error('Timeout nach ' + timeoutMs + 'ms'));
+                }, timeoutMs);
+
+                fetch(url).then(function(res) {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    resolve(res);
+                }).catch(function(err) {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    reject(err);
+                });
+            });
         }
 
         function fetchCalendarEvents(calendarId, rangeStart, rangeEnd) {
@@ -344,7 +362,7 @@
                         return { status: 'fulfilled', items: items, color: cfg.color };
                     })
                     .catch(function(err) {
-                        var reason = (err && err.name === 'AbortError') ? 'Timeout (10s)' : (err && err.message);
+                        var reason = err && err.message;
                         console.error('Fehler beim Laden Kalender ' + (index+1) + ':', reason);
                         logError('ERROR', 'Kalender ' + (index+1) + ' fehlgeschlagen: ' + reason);
                         return { status: 'rejected', reason: err };
