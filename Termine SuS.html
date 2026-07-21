@@ -11,9 +11,7 @@
 
     <!-- FullCalendar -->
     <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
-    <!-- Ical.js -->
-    <script src="https://cdn.jsdelivr.net/npm/ical.js@1.5.0/build/ical.min.js"></script>
-    
+
     <style>
         html, body {
             height: 100%;
@@ -240,7 +238,7 @@
         // Fängt fehlgeschlagene <script src="..."> Ladevorgänge ab (z.B. wenn
         // die Schul-Firewall cdn.jsdelivr.net blockiert). Ohne diesen Handler
         // bleibt die Seite stumm bei "Lade Kalender..." hängen, weil
-        // FullCalendar/ICAL dann undefined sind und der restliche Code nie läuft.
+        // FullCalendar dann undefined ist und der restliche Code nie läuft.
         window.addEventListener('error', function(e) {
             var target = e.target;
             if (target && target.tagName === 'SCRIPT') {
@@ -252,79 +250,45 @@
             }
         }, true);
 
-        // Holt eine URL mit Timeout, damit ein "hängender" Request (z.B. weil eine
-        // Schul-Firewall die Verbindung stillschweigend fallen lässt, statt sie
-        // sauber abzulehnen) nicht den gesamten Ladevorgang für immer blockiert.
+        // Öffentliche Google-Kalender werden direkt über die Google Calendar API (JSON, v3)
+        // abgerufen. Google liefert dort saubere CORS-Header (Access-Control-Allow-Origin: *),
+        // d.h. es wird KEIN Proxy/Worker mehr benötigt. googleapis.com wird von Schul-Firewalls
+        // praktisch nie blockiert (im Gegensatz zu workers.dev, corsproxy.io etc.).
+        //
+        // API-Key hier eintragen (siehe Anleitung): Google Cloud Console -> Projekt anlegen ->
+        // "Google Calendar API" aktivieren -> Anmeldedaten -> API-Schlüssel erstellen ->
+        // auf die eigene Domain (HTTP-Verweis-URLs) einschränken.
+        var GOOGLE_API_KEY = 'AIzaSyC4LmJ33nQi_dQHCCmotkK04_rEyJWOBCY';
+
+        var calendarConfigs = [
+            { id: 'dr23bb74v8vvnpn2sgmnrhdn4g@group.calendar.google.com', color: '#3f51b5' },
+            { id: '5a5mb1jceu56dhb023cctdcmt8@group.calendar.google.com', color: '#c0ca33' }
+        ];
+
+        // Holt eine URL mit Timeout, damit ein "hängender" Request nicht den gesamten
+        // Ladevorgang für immer blockiert.
         function fetchWithTimeout(url, timeoutMs) {
             var controller = new AbortController();
             var timer = setTimeout(function() { controller.abort(); }, timeoutMs);
-            return fetch(url, { mode: 'cors', credentials: 'omit', signal: controller.signal })
+            return fetch(url, { signal: controller.signal })
                 .finally(function() { clearTimeout(timer); });
         }
 
-        function fetchWithFallback(targetUrl) {
-            var proxies = [
-                {
-                    name: 'Cloudflare Worker',
-                    transform: function(url) {
-                        return 'https://kalenderdhws-sus.mailtomangold.workers.dev/?url=' + encodeURIComponent(url);
-                    }
-                },
-                {
-                    name: 'AllOrigins Proxy',
-                    transform: function(url) {
-                        return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
-                    }
-                },
-                {
-                    name: 'Direct Fetch',
-                    transform: function(url) {
-                        return url;
-                    }
+        function fetchCalendarEvents(calendarId, rangeStart, rangeEnd) {
+            var url = 'https://www.googleapis.com/calendar/v3/calendars/'
+                + encodeURIComponent(calendarId)
+                + '/events?key=' + encodeURIComponent(GOOGLE_API_KEY)
+                + '&timeMin=' + encodeURIComponent(rangeStart.toISOString())
+                + '&timeMax=' + encodeURIComponent(rangeEnd.toISOString())
+                + '&singleEvents=true&orderBy=startTime&maxResults=2500';
+
+            return fetchWithTimeout(url, 10000).then(function(res) {
+                if (!res.ok) {
+                    return res.text().then(function(body) {
+                        throw new Error('HTTP ' + res.status + ' – ' + body.substring(0, 200));
+                    });
                 }
-            ];
-
-            return new Promise(function(resolve, reject) {
-                var attempt = 0;
-
-                function tryProxy() {
-                    if (attempt >= proxies.length) {
-                        reject(new Error('Alle Proxies fehlgeschlagen'));
-                        return;
-                    }
-
-                    var proxy = proxies[attempt];
-                    var fullUrl = proxy.transform(targetUrl);
-
-                    console.log('Versuche: ' + proxy.name);
-                    document.getElementById('loading').innerText = 'Versuche ' + proxy.name + '...';
-                    logError('DEBUG', 'Proxy: ' + proxy.name);
-
-                    fetchWithTimeout(fullUrl, 8000)
-                        .then(function(res) {
-                            console.log(proxy.name + ' - Status: ' + res.status);
-                            logError('DEBUG', proxy.name + ' - Status: ' + res.status);
-                            if (!res.ok) throw new Error('HTTP ' + res.status);
-                            return res.text();
-                        })
-                        .then(function(text) {
-                            if (!text || text.indexOf('BEGIN:VCALENDAR') === -1) {
-                                throw new Error('Ungültige Daten');
-                            }
-                            console.log('✓ ' + proxy.name + ' erfolgreich!');
-                            logError('SUCCESS', proxy.name + ' erfolgreich geladen!');
-                            resolve(text);
-                        })
-                        .catch(function(err) {
-                            var reason = (err && err.name === 'AbortError') ? 'Timeout (8s), evtl. durch Firewall blockiert' : (err && err.message);
-                            console.warn(proxy.name + ' fehlgeschlagen: ' + reason);
-                            logError('WARNING', proxy.name + ' fehlgeschlagen: ' + reason);
-                            attempt++;
-                            setTimeout(tryProxy, 1000);
-                        });
-                }
-
-                tryProxy();
+                return res.json();
             });
         }
 
@@ -361,24 +325,29 @@
         function loadAllEvents() {
             if (cachedEvents) return Promise.resolve(cachedEvents);
 
-            var urls = [
-                'https://calendar.google.com/calendar/ical/dr23bb74v8vvnpn2sgmnrhdn4g%40group.calendar.google.com/public/basic.ics',
-                'https://calendar.google.com/calendar/ical/5a5mb1jceu56dhb023cctdcmt8%40group.calendar.google.com/public/basic.ics'
-            ];
-            
-            var colors = ['#3f51b5', '#c0ca33', '#009688', '#e91e63'];
+            // Events für einen großen Zeitraum laden (-1 Monat bis +3 Monate)
+            var now = new Date();
+            var rangeStart = new Date(now);
+            rangeStart.setMonth(rangeStart.getMonth() - 1);
+            var rangeEnd = new Date(now);
+            rangeEnd.setMonth(rangeEnd.getMonth() + 3);
 
-            var promises = urls.map(function(url) {
-                return fetchWithFallback(url)
-                    .then(function(text) { 
-                        console.log('Kalender geladen: ' + text.length + ' bytes');
-                        logError('DEBUG', 'Kalender geladen: ' + text.length + ' bytes');
-                        return { status: 'fulfilled', value: text }; 
+            var promises = calendarConfigs.map(function(cfg, index) {
+                document.getElementById('loading').innerText = 'Lade Kalender ' + (index + 1) + '...';
+                logError('DEBUG', 'Lade Kalender ' + (index + 1) + ' via Google Calendar API...');
+
+                return fetchCalendarEvents(cfg.id, rangeStart, rangeEnd)
+                    .then(function(data) {
+                        var items = data.items || [];
+                        console.log('Kalender ' + (index+1) + ': ' + items.length + ' Events');
+                        logError('SUCCESS', 'Kalender ' + (index+1) + ': ' + items.length + ' Events geladen');
+                        return { status: 'fulfilled', items: items, color: cfg.color };
                     })
-                    .catch(function(err) { 
-                        console.error('Fehler beim Laden:', err);
-                        logError('ERROR', 'Fehler beim Laden: ' + err.message);
-                        return { status: 'rejected', reason: err }; 
+                    .catch(function(err) {
+                        var reason = (err && err.name === 'AbortError') ? 'Timeout (10s)' : (err && err.message);
+                        console.error('Fehler beim Laden Kalender ' + (index+1) + ':', reason);
+                        logError('ERROR', 'Kalender ' + (index+1) + ' fehlgeschlagen: ' + reason);
+                        return { status: 'rejected', reason: err };
                     });
             });
 
@@ -386,84 +355,33 @@
                 if (results.every(function(r) { return r.status === 'rejected'; })) {
                     // Kein einziger Kalender konnte geladen werden -> nach oben durchreichen,
                     // damit eine sichtbare Fehlermeldung statt eines leeren "keine Termine" erscheint.
-                    throw new Error('Kein Kalender konnte geladen werden (alle Proxies fehlgeschlagen)');
+                    throw new Error('Kein Kalender konnte geladen werden');
                 }
 
                 var allEvents = [];
 
-                // Wir berechnen hier Events für einen großen Zeitraum (z.B. -1 Monat bis +3 Monate)
-                var now = new Date();
-                var rangeStart = new Date(now);
-                rangeStart.setMonth(rangeStart.getMonth() - 1);
-                var rangeEnd = new Date(now);
-                rangeEnd.setMonth(rangeEnd.getMonth() + 3);
+                results.forEach(function(result) {
+                    if (result.status === 'rejected') return;
 
-                var icalRangeStart = ICAL.Time.fromJSDate(rangeStart);
-                var icalRangeEnd = ICAL.Time.fromJSDate(rangeEnd);
+                    result.items.forEach(function(item) {
+                        if (!item.start) return;
+                        var isAllDay = !!item.start.date;
+                        var start = isAllDay
+                            ? new Date(item.start.date + 'T00:00:00')
+                            : new Date(item.start.dateTime);
 
-                results.forEach(function(result, index) {
-                    if (result.status === 'rejected') {
-                        logError('Fehler Kalender ' + (index + 1) + ':', result.reason);
-                        return;
-                    }
-
-                    var icsData = result.value;
-                    var color = colors[index % colors.length];
-                    
-                    console.log('Parsing Kalender ' + (index+1) + '...');
-                    logError('DEBUG', 'Parsing Kalender ' + (index+1) + ', ' + icsData.length + ' bytes');
-                    
-                    try {
-                        var jcalData = ICAL.parse(icsData);
-                        var comp = new ICAL.Component(jcalData);
-                        var vevents = comp.getAllSubcomponents('vevent');
-                        
-                        console.log('Gefunden: ' + vevents.length + ' VEVENTs in Kalender ' + (index+1));
-                        logError('DEBUG', 'Gefunden: ' + vevents.length + ' VEVENTs in Kalender ' + (index+1));
-                        
-                        vevents.forEach(function(vevent) {
-                            var event = new ICAL.Event(vevent);
-                            var summary = event.summary;
-                            
-                            if (event.isRecurring()) {
-                                var iterator = event.iterator();
-                                var next;
-                                var maxLoops = 2000; 
-                                var loops = 0;
-
-                                while ((next = iterator.next()) && loops < maxLoops) {
-                                    loops++;
-                                    if (next.compare(icalRangeStart) < 0) continue;
-                                    if (next.compare(icalRangeEnd) > 0) break;
-                                    
-                                    allEvents.push({
-                                        title: summary,
-                                        start: next.toJSDate(),
-                                        allDay: event.startDate.isDate,
-                                        color: color
-                                    });
-                                }
-                            } else {
-                                var start = event.startDate.toJSDate();
-                                if (start >= rangeStart && start <= rangeEnd) {
-                                    allEvents.push({
-                                        title: summary,
-                                        start: start,
-                                        allDay: event.startDate.isDate,
-                                        color: color
-                                    });
-                                }
-                            }
+                        allEvents.push({
+                            title: item.summary || '(ohne Titel)',
+                            start: start,
+                            allDay: isAllDay,
+                            color: result.color
                         });
-                    } catch (e) {
-                        logError("Fehler beim Parsen Kalender " + (index+1) + ":", e);
-                        console.error("Parse Error:", e);
-                    }
+                    });
                 });
-                
+
                 console.log('Total Events vor Deduplizierung: ' + allEvents.length);
                 logError('DEBUG', 'Total Events vor Deduplizierung: ' + allEvents.length);
-                
+
                 // Duplikate entfernen
                 // Wir filtern Events, die am gleichen Tag den gleichen Titel haben
                 var uniqueEvents = [];
@@ -474,16 +392,16 @@
                     var d = ev.start;
                     var dateStr = d.getFullYear() + '-' + (d.getMonth()+1) + '-' + d.getDate();
                     var key = dateStr + '|' + ev.title;
-                    
+
                     if (!seen.has(key)) {
                         seen.add(key);
                         uniqueEvents.push(ev);
                     }
                 });
-                
+
                 console.log('Final Events nach Deduplizierung: ' + uniqueEvents.length);
                 logError('SUCCESS', 'Final Events: ' + uniqueEvents.length);
-                
+
                 cachedEvents = uniqueEvents;
                 return uniqueEvents;
             });
@@ -639,9 +557,15 @@
         document.addEventListener('DOMContentLoaded', function() {
             var loadingEl = document.getElementById('loading');
 
-            if (typeof FullCalendar === 'undefined' || typeof ICAL === 'undefined') {
+            if (typeof FullCalendar === 'undefined') {
                 loadingEl.innerHTML = '⚠ Kalender-Bibliothek (cdn.jsdelivr.net) konnte nicht geladen werden.<br><small>Bitte cdn.jsdelivr.net in der Schul-Firewall freigeben.</small>';
-                logError('FATAL', 'FullCalendar oder ICAL.js ist undefined – CDN vermutlich blockiert.');
+                logError('FATAL', 'FullCalendar ist undefined – CDN vermutlich blockiert.');
+                return;
+            }
+
+            if (!GOOGLE_API_KEY || GOOGLE_API_KEY === 'DEIN_API_KEY_HIER') {
+                loadingEl.innerHTML = '⚠ Kein Google-API-Key eingetragen.<br><small>Siehe Kommentar bei GOOGLE_API_KEY im Code.</small>';
+                logError('FATAL', 'GOOGLE_API_KEY ist nicht gesetzt.');
                 return;
             }
 
