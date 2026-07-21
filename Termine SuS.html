@@ -228,9 +228,9 @@
     <script>
         function logError(msg, err) {
             console.error(msg, err);
-            // Fehlermeldung wird JETZT angezeigt (für Debugging)
+            // Bewusst nur in der Browser-Konsole sichtbar, nicht auf dem Bildschirm –
+            // die rote Debug-Box bleibt für den Normalbetrieb ausgeblendet.
             var logEl = document.getElementById('debug-log');
-            logEl.style.display = 'block';
             var errText = err ? (err.message || err.toString()) : '';
             logEl.innerHTML += '<div><strong>' + msg + '</strong> ' + errText + '</div>';
         }
