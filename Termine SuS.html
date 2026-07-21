@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Termine SuS DSB</title>
+    
+    <!-- Polyfills -->
+    <script src="https://cdn.jsdelivr.net/npm/promise-polyfill@8/dist/polyfill.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/whatwg-fetch@3.6.2/dist/fetch.umd.min.js"></script>
+
+    <!-- FullCalendar -->
+    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
+    <!-- Ical.js -->
+    <script src="https://cdn.jsdelivr.net/npm/ical.js@1.5.0/build/ical.min.js"></script>
+    
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+        }
+        .row {
+            display: flex;
+            flex-direction: row;
+            flex: 1 1 auto;
+            min-height: 0;
+            width: 100%;
+        }
+        .column {
+            flex: 1 1 0;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #333;
+            padding: 10px;
+            box-sizing: border-box;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .column:last-child {
+            border-right: none;
+        }
+
+        h2 {
+            text-align: center;
+            color: #4da6ff;
+            margin: 10px 0;
+            font-size: 1.5em;
+        }
+
+        .calendar-wrapper {
+            flex: 1 1 auto;
+            overflow: hidden; /* FullCalendar handles scroll */
+            min-height: 0;
+        }
+
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 2em;
+            color: #4da6ff;
+            background: rgba(0,0,0,0.7);
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 500;
+        }
+
+        #debug-log {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            max-height: 150px;
+            overflow-y: auto;
+            background: rgba(255, 0, 0, 0.9);
+            color: #ffffff;
+            font-family: monospace;
+            padding: 10px;
+            display: none; 
+            z-index: 1000;
+            border-top: 1px solid #fff;
+            font-size: 14px;
+        }
+
+        /* Design */
+        .fc-theme-standard td, .fc-theme-standard th { border-color: #333; }
+        .fc-list-day-cushion { 
+            background-color: #333 !important; 
+            padding: 4px 8px !important; /* Compact padding */
+        }
+        .fc-list-event:hover td { background-color: #444 !important; }
+        
+        /* Compact rows */
+        .fc-list-event td {
+            padding: 2px 8px !important;
+        }
+
+        /* Highlight today - Dark Green */
+        .fc-list-day.fc-day-today,
+        .fc-list-day.fc-day-today .fc-list-day-cushion {
+            background-color: #1b5e20 !important; /* Dark Green background for header */
+        }
+        .fc-list-day.fc-day-today .fc-list-day-text,
+        .fc-list-day.fc-day-today .fc-list-day-side-text {
+            color: #ffffff !important; /* White text */
+            font-weight: bold;
+        }
+
+        .fc-list-day.fc-day-today .fc-list-day-side-text::before {
+            content: "heute: ";
+        }
+        
+        .today-event td {
+            background-color: rgba(76, 175, 80, 0.2) !important; /* Light green background */
+            border-left: 6px solid #4caf50 !important; /* Thicker green border */
+        }
+        
+        .today-event .fc-list-event-title {
+            font-weight: bold;
+        }
+
+        .fc-toolbar-title { font-size: 1.8em !important; color: #4da6ff; }
+        .fc-button { background-color: #444 !important; border: none !important; }
+        
+        .fc-list-event-title { font-size: 1.1em; cursor: default; line-height: 1.2; }
+        .fc-list-event-time { font-size: 1.0em; color: #cccccc !important; font-weight: normal; }
+        .fc-list-empty { background-color: #121212; color: #888; font-size: 1.2em; }
+        
+        /* Weekend Styling */
+        .fc-list-day.fc-day-sat .fc-list-day-cushion,
+        .fc-list-day.fc-day-sun .fc-list-day-cushion {
+            background-color: #1a237e !important; /* Dark Blue for Weekend */
+        }
+
+        /* Past Events */
+        .past-event {
+            opacity: 0.5;
+        }
+
+        /* Spacing between days */
+        .fc-list-day th {
+            border-top: 10px solid #121212 !important;
+        }
+        
+        /* Hide toolbar since we have custom headers */
+        .fc-header-toolbar { display: none !important; }
+
+        /* Hide scrollbars */
+        .fc-scroller {
+            overflow-y: hidden !important; /* Try to avoid scrollbars initially */
+        }
+
+        /* Ordnungsdienst Box */
+        .ordnungsdienst-box {
+    background: linear-gradient(135deg, #1b5e20 0%, #2e7d32 100%);
+    border: 2px solid #4caf50;
+    border-radius: 10px;
+    padding: 8px 18px;
+    margin: 8px 10px 12px 10px;
+    box-shadow: 0 2px 8px rgba(76, 175, 80, 0.18);
+    text-align: center;
+    font-size: 1.4em;
+    color: #ffffff;
+    min-height: unset;
+    height: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+        }
+
+        .ordnungsdienst-box .title {
+    font-weight: bold;
+    margin-bottom: 0;
+    margin-right: 12px;
+    color: #fff;
+    font-size: 1.4em; /* match students text size */
+    display: inline;
+        }
+
+        .ordnungsdienst-box .class-name {
+            color: #ffc107;
+            font-weight: bold;
+        }
+        .ordnungsdienst-box .students {
+            font-size: 1.4em;
+        }
+    </style>
+</head>
+<body>
+
+
+    <div id='loading'>Lade Kalender...</div>
+
+    <div class="container">
+        <div class="row">
+            <div class="column">
+                <h2>Diese Woche</h2>
+                <div id="calendar-this-week" class="calendar-wrapper"></div>
+            </div>
+            <div class="column">
+                <h2>Nächste Woche</h2>
+                <div id="calendar-next-week" class="calendar-wrapper"></div>
+            </div>
+        </div>
+        <div id="ordnungsdienst-box" class="ordnungsdienst-box" style="display: none;">
+            <!-- Wird dynamisch gefüllt -->
+        </div>
+    </div>
+
+    <div id='debug-log'></div>
+
+    <script>
+        function logError(msg, err) {
+            console.error(msg, err);
+            // Fehlermeldung wird JETZT angezeigt (für Debugging)
+            var logEl = document.getElementById('debug-log');
+            logEl.style.display = 'block';
+            var errText = err ? (err.message || err.toString()) : '';
+            logEl.innerHTML += '<div><strong>' + msg + '</strong> ' + errText + '</div>';
+        }
+
+        // Fängt fehlgeschlagene <script src="..."> Ladevorgänge ab (z.B. wenn
+        // die Schul-Firewall cdn.jsdelivr.net blockiert). Ohne diesen Handler
+        // bleibt die Seite stumm bei "Lade Kalender..." hängen, weil
+        // FullCalendar/ICAL dann undefined sind und der restliche Code nie läuft.
+        window.addEventListener('error', function(e) {
+            var target = e.target;
+            if (target && target.tagName === 'SCRIPT') {
+                logError('SCRIPT-FEHLER', 'Konnte nicht geladen werden: ' + target.src + ' (evtl. durch Schul-Firewall/Proxy blockiert)');
+                var loadingEl = document.getElementById('loading');
+                if (loadingEl) {
+                    loadingEl.innerHTML = '⚠ Bibliothek konnte nicht geladen werden.<br><small>' + target.src + '</small>';
+                }
+            }
+        }, true);
+
+        // Holt eine URL mit Timeout, damit ein "hängender" Request (z.B. weil eine
+        // Schul-Firewall die Verbindung stillschweigend fallen lässt, statt sie
+        // sauber abzulehnen) nicht den gesamten Ladevorgang für immer blockiert.
+        function fetchWithTimeout(url, timeoutMs) {
+            var controller = new AbortController();
+            var timer = setTimeout(function() { controller.abort(); }, timeoutMs);
+            return fetch(url, { mode: 'cors', credentials: 'omit', signal: controller.signal })
+                .finally(function() { clearTimeout(timer); });
+        }
+
+        function fetchWithFallback(targetUrl) {
+            var proxies = [
+                {
+                    name: 'Cloudflare Worker',
+                    transform: function(url) {
+                        return 'https://kalenderdhws-sus.mailtomangold.workers.dev/?url=' + encodeURIComponent(url);
+                    }
+                },
+                {
+                    name: 'AllOrigins Proxy',
+                    transform: function(url) {
+                        return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+                    }
+                },
+                {
+                    name: 'Direct Fetch',
+                    transform: function(url) {
+                        return url;
+                    }
+                }
+            ];
+
+            return new Promise(function(resolve, reject) {
+                var attempt = 0;
+
+                function tryProxy() {
+                    if (attempt >= proxies.length) {
+                        reject(new Error('Alle Proxies fehlgeschlagen'));
+                        return;
+                    }
+
+                    var proxy = proxies[attempt];
+                    var fullUrl = proxy.transform(targetUrl);
+
+                    console.log('Versuche: ' + proxy.name);
+                    document.getElementById('loading').innerText = 'Versuche ' + proxy.name + '...';
+                    logError('DEBUG', 'Proxy: ' + proxy.name);
+
+                    fetchWithTimeout(fullUrl, 8000)
+                        .then(function(res) {
+                            console.log(proxy.name + ' - Status: ' + res.status);
+                            logError('DEBUG', proxy.name + ' - Status: ' + res.status);
+                            if (!res.ok) throw new Error('HTTP ' + res.status);
+                            return res.text();
+                        })
+                        .then(function(text) {
+                            if (!text || text.indexOf('BEGIN:VCALENDAR') === -1) {
+                                throw new Error('Ungültige Daten');
+                            }
+                            console.log('✓ ' + proxy.name + ' erfolgreich!');
+                            logError('SUCCESS', proxy.name + ' erfolgreich geladen!');
+                            resolve(text);
+                        })
+                        .catch(function(err) {
+                            var reason = (err && err.name === 'AbortError') ? 'Timeout (8s), evtl. durch Firewall blockiert' : (err && err.message);
+                            console.warn(proxy.name + ' fehlgeschlagen: ' + reason);
+                            logError('WARNING', proxy.name + ' fehlgeschlagen: ' + reason);
+                            attempt++;
+                            setTimeout(tryProxy, 1000);
+                        });
+                }
+
+                tryProxy();
+            });
+        }
+
+        // Globaler Cache für die Events
+        var cachedEvents = null;
+
+        function fitContent() {
+            var cal1El = document.getElementById('calendar-this-week');
+            var cal2El = document.getElementById('calendar-next-week');
+            
+            // Start mit maximaler Schriftgröße (28px wie gewünscht)
+            var fontSize = 28; 
+            cal1El.style.fontSize = fontSize + 'px';
+            cal2El.style.fontSize = fontSize + 'px';
+            
+            // Wenn Inhalt größer als Container, Schrift verkleinern (synchron für beide)
+            requestAnimationFrame(function() {
+                var scroller1 = cal1El.querySelector('.fc-scroller');
+                var scroller2 = cal2El.querySelector('.fc-scroller');
+                
+                if (!scroller1 || !scroller2) return;
+
+                // Solange EINER der beiden zu groß ist, verkleinern wir BEIDE
+                while ((scroller1.scrollHeight > scroller1.clientHeight || 
+                        scroller2.scrollHeight > scroller2.clientHeight) && 
+                       fontSize > 8) {
+                    fontSize -= 1;
+                    cal1El.style.fontSize = fontSize + 'px';
+                    cal2El.style.fontSize = fontSize + 'px';
+                }
+            });
+        }
+
+        function loadAllEvents() {
+            if (cachedEvents) return Promise.resolve(cachedEvents);
+
+            var urls = [
+                'https://calendar.google.com/calendar/ical/dr23bb74v8vvnpn2sgmnrhdn4g%40group.calendar.google.com/public/basic.ics',
+                'https://calendar.google.com/calendar/ical/5a5mb1jceu56dhb023cctdcmt8%40group.calendar.google.com/public/basic.ics'
+            ];
+            
+            var colors = ['#3f51b5', '#c0ca33', '#009688', '#e91e63'];
+
+            var promises = urls.map(function(url) {
+                return fetchWithFallback(url)
+                    .then(function(text) { 
+                        console.log('Kalender geladen: ' + text.length + ' bytes');
+                        logError('DEBUG', 'Kalender geladen: ' + text.length + ' bytes');
+                        return { status: 'fulfilled', value: text }; 
+                    })
+                    .catch(function(err) { 
+                        console.error('Fehler beim Laden:', err);
+                        logError('ERROR', 'Fehler beim Laden: ' + err.message);
+                        return { status: 'rejected', reason: err }; 
+                    });
+            });
+
+            return Promise.all(promises).then(function(results) {
+                if (results.every(function(r) { return r.status === 'rejected'; })) {
+                    // Kein einziger Kalender konnte geladen werden -> nach oben durchreichen,
+                    // damit eine sichtbare Fehlermeldung statt eines leeren "keine Termine" erscheint.
+                    throw new Error('Kein Kalender konnte geladen werden (alle Proxies fehlgeschlagen)');
+                }
+
+                var allEvents = [];
+
+                // Wir berechnen hier Events für einen großen Zeitraum (z.B. -1 Monat bis +3 Monate)
+                var now = new Date();
+                var rangeStart = new Date(now);
+                rangeStart.setMonth(rangeStart.getMonth() - 1);
+                var rangeEnd = new Date(now);
+                rangeEnd.setMonth(rangeEnd.getMonth() + 3);
+
+                var icalRangeStart = ICAL.Time.fromJSDate(rangeStart);
+                var icalRangeEnd = ICAL.Time.fromJSDate(rangeEnd);
+
+                results.forEach(function(result, index) {
+                    if (result.status === 'rejected') {
+                        logError('Fehler Kalender ' + (index + 1) + ':', result.reason);
+                        return;
+                    }
+
+                    var icsData = result.value;
+                    var color = colors[index % colors.length];
+                    
+                    console.log('Parsing Kalender ' + (index+1) + '...');
+                    logError('DEBUG', 'Parsing Kalender ' + (index+1) + ', ' + icsData.length + ' bytes');
+                    
+                    try {
+                        var jcalData = ICAL.parse(icsData);
+                        var comp = new ICAL.Component(jcalData);
+                        var vevents = comp.getAllSubcomponents('vevent');
+                        
+                        console.log('Gefunden: ' + vevents.length + ' VEVENTs in Kalender ' + (index+1));
+                        logError('DEBUG', 'Gefunden: ' + vevents.length + ' VEVENTs in Kalender ' + (index+1));
+                        
+                        vevents.forEach(function(vevent) {
+                            var event = new ICAL.Event(vevent);
+                            var summary = event.summary;
+                            
+                            if (event.isRecurring()) {
+                                var iterator = event.iterator();
+                                var next;
+                                var maxLoops = 2000; 
+                                var loops = 0;
+
+                                while ((next = iterator.next()) && loops < maxLoops) {
+                                    loops++;
+                                    if (next.compare(icalRangeStart) < 0) continue;
+                                    if (next.compare(icalRangeEnd) > 0) break;
+                                    
+                                    allEvents.push({
+                                        title: summary,
+                                        start: next.toJSDate(),
+                                        allDay: event.startDate.isDate,
+                                        color: color
+                                    });
+                                }
+                            } else {
+                                var start = event.startDate.toJSDate();
+                                if (start >= rangeStart && start <= rangeEnd) {
+                                    allEvents.push({
+                                        title: summary,
+                                        start: start,
+                                        allDay: event.startDate.isDate,
+                                        color: color
+                                    });
+                                }
+                            }
+                        });
+                    } catch (e) {
+                        logError("Fehler beim Parsen Kalender " + (index+1) + ":", e);
+                        console.error("Parse Error:", e);
+                    }
+                });
+                
+                console.log('Total Events vor Deduplizierung: ' + allEvents.length);
+                logError('DEBUG', 'Total Events vor Deduplizierung: ' + allEvents.length);
+                
+                // Duplikate entfernen
+                // Wir filtern Events, die am gleichen Tag den gleichen Titel haben
+                var uniqueEvents = [];
+                var seen = new Set();
+
+                allEvents.forEach(function(ev) {
+                    // Erstelle einen eindeutigen Schlüssel aus Datum und Titel
+                    var d = ev.start;
+                    var dateStr = d.getFullYear() + '-' + (d.getMonth()+1) + '-' + d.getDate();
+                    var key = dateStr + '|' + ev.title;
+                    
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        uniqueEvents.push(ev);
+                    }
+                });
+                
+                console.log('Final Events nach Deduplizierung: ' + uniqueEvents.length);
+                logError('SUCCESS', 'Final Events: ' + uniqueEvents.length);
+                
+                cachedEvents = uniqueEvents;
+                return uniqueEvents;
+            });
+        }
+
+        // === ORDNUNGSDIENST LOGIK ===
+        var csvData = "Vorname,Familienname,Klasse\nBertan Umut,Ak,10A\nKlea,Aliu,10A\nRua'a,Ayoub,10A\nGeorgios,Batiridis,10A\nMehdi,Bouchane,10A\nSamuel,Chmitorz,10A\nAmar,Cizmo,10A\nDylan Santush,De Silva,10A\nLilly Aiko,Flessner,10A\nStoil,Georgiev,10A\nMinel,Gül,10A\nLeis,Hasanbasic,10A\nAhmed,Hussein,10A\nEliza,Islami,10A\nErblin,Isufi,10A\nFabian,Jurkat,10A\nLisa Sophie,Lois,10A\nChristopher Laszlo,Malya,10A\nNgoc Anh,Nguyen,10A\nLeart,Osmani,10A\nAkim Shams,Pamiry,10A\nFilip,Risteski,10A\nLuna Zoya,Rumann,10A\nFabrizio,Saullo,10A\nYamin,Sharifi,10A\nDaria,Surzhko,10A\nChristina,Tersenidou,10A\nUgur,Ugras,10A\nKrzysztof,Biernat,10B\nLhance,Castillo,10B\nPhilipp Jan,Czekanski,10B\nAnnabella Elisabeth Centa,Dullinger,10B\nDavid Noel,Fernando,10B\nJulius Darius,Fister,10B\nMarko Leon,Galic,10B\nAndela,Grgic,10B\nAlina,Hofmuth,10B\nSarah Selma,Illichmann,10B\nHappy,Imadoy,10B\nVivienne Veronique,Istvan,10B\nMarc-Leon Alex,Koch,10B\nEmilia Karolina,Lewandowska,10B\nAlessio,Michelini,10B\nAna-Marija,Milic,10B\nConstantin Elias Maximilian,Nowotny,10B\nCaroline Ugochi,Onuigwe,10B\nGreat,Oro,10B\nAngelo Allessandro,Pignataro,10B\nDaniele Antonio,Pollina,10B\nPaul Matthias,Rapf,10B\nSandy,Rebelinska,10B\nSwaran,Rekhi,10B\nAnnalena-Zoey,Salihi,10B\nValentin,Schmelich-Renard,10B\nMaximilian,Stegmann,10B\nSophia Monika Elisabeth,Strixner,10B\nJonathan Kwame,Tehua,10B\nKristof,Toth,10B\nMarkus,Zuher Yelda,10B\nAhmed,Agovic,10C\nLano,Ahmad,10C\nSara,Al Salih,10C\nVasil Desislavov,Asparuhov,10C\nAlisa,Bahtiri,10C\nEfe Ali,Bayrak,10C\nBenedito Nkosi,Cololo,10C\nJoao Victor,De Oliveira,10C\nDilara,Demirel,10C\nAltina,Dobra,10C\nEfe Süleyman,Eker,10C\nLeon Pascal,Grieser,10C\nZohra,Haschemi,10C\nTamer Maximilian,Jabal,10C\nJooyaa Nersy,Karami,10C\nDaniel,Kauntz,10C\nTito Gabriel,Klein,10C\nNijen,Maharjan,10C\nErel,Maloku,10C\nMariam,Mdzeluri,10C\nLuana,Morina,10C\nBogdan Constantin,Motea,10C\nXuan Hieu,Nguyen,10C\nElija Josef,Nolte,10C\nAlesia,Ramadani,10C\nLoran,Rexha,10C\nKenan,Rizvanovic,10C\nArda,Sefket Oglou,10C\nSafa,Zazai,10C\nDiyar,Ali Ahmad,10D\nMasud,Ansari,10D\nLuca Petra,Berta,10D\nSamuel,Boyer,10D\nAntonios,Bozinis,10D\nElshaddai Folikoue Lincoln,Djagoe,10D\nAshab Muhammed,Dursun,10D\nEbrar,Dursun,10D\nArda Ali,Ekiz,10D\nAlisa,Hoxha,10D\nAsmin,Imre,10D\nMustafa,Jameel,10D\nPaiman,Kabir,10D\nRohaan,Kashif,10D\nMaria Alexandra,Kiourtzidou,10D\nYaren,Köseoglu,10D\nViktor,Kropyva,10D\nSakolwat,Kunnika,10D\nDorra,M'Hadhbi,10D\nAdrian Luan,Meziu,10D\nAsadullah,Mujadidi,10D\nIvan,Perov,10D\nIlias,Savvidis,10D\nIbrahim,Sillah,10D\nIlona,Usaj,10D\nEnes,Vardar,10D\nMilica,Vojvodic,10D\nOmar,Wafa,10D\nFelix,Weigert,10D\nMunazar,Abdi,10E\nMartha,Agkanian,10E\nGhalya,Alahmad,10E\nMohammad,Almaslukh,10E\nLaraa,Bascha,10E\nEl Mehdi,Ben Amar,10E\nAziz,Ben Salah,10E\nArianit,Beqiri,10E\nArda,Büyük,10E\nVlera,Durminski,10E\nMert Ömer,Eker,10E\nArda Turan,Erdem,10E\nErdinch Ayvaz,Erdinch,10E\nAmmar,Halili,10E\nIsabell,Heinicke,10E\nHenri Linus,Helbig,10E\nOmer,Idrizi,10E\nEsada,Ledinic,10E\nKethy Liara,Lois,10E\nMahamed,Mahmoud,10E\nJoana Delicia,Martins,10E\nImer,Matoshi,10E\nSemi,Mazrek,10E\nSaid Shoibullah,Mushfiq,10E\nSafiullah,Naseri,10E\nElson,Qerkinaj,10E\nJennifer,Szauer,10E\nAnissa,Tamim,10E\nDin,Azirovic,10F\nTim Luca,Bacher,10F\nFerdinand Clemens Leander,Baron,10F\nYusuf,Belek,10F\nRyan Issuru,de Silva,10F\nSami,Demic,10F\nLukas Kartal,Duchon,10F\nZakhar,Heiko,10F\nJason-Gonzalez,Hupf,10F\nAndrew Eliud Ngugi Muiru,Kamau,10F\nLara,Kaplan,10F\nSerhan,Karadiken,10F\nCeylin Ecrin,Kaya,10F\nIessa Haschem,Kazem,10F\nOrnela,Keqa,10F\nStella,Kokiou,10F\nBouchra,Lhioui,10F\nNejra,Lidan,10F\nAndela,Martic,10F\nUmar,Nawaz,10F\nPax Khanh Luan,Nguyen,10F\nStrahinja,Regodic,10F\nArian,Ristemi,10F\nAlbesa,Sulejmani,10F\nMujtaba,Tajik,10F\nZohre,Tajik,10F\nNiko,Ugarkovic,10F\nMara,Walz,10F\nFarrell Ebitari,Agara,10G\nSunur Odi,Ali Abdi,10G\nBenjamin,Arifovic,10G\nMariam,Ayoub,10G\nDzenifer,Babajic,10G\nKadhim Qasim Kadhim,Bebani,10G\nYassir,Bennour,10G\nRinas,Beri,10G\nKiryl,Bilan,10G\nMohamed Rezki,Chehboune,10G\nKeyan Malik,Durgut,10G\nEna,Dzanovic,10G\nKhesraw Ahmad,Farid,10G\nMarwa,Faysal Abdirahman,10G\nDjellarta,Gashi,10G\nRoman,Goldynski,10G\nDilara,Islami,10G\nRedon,Jashari,10G\nRinesa,Kadriu,10G\nHasnain,Khan,10G\nVeniamin,Konchakovskyi,10G\nLena,Lorenz,10G\nFernando,Maresi,10G\nMohamed,Mohammadi,10G\nRahand,Mohammed,10G\nAbidelrahman,Omer,10G\nYusuf,Öztürk,10G\nNoah Emil Richard,Reppert,10G\nAlexandros,Sakalidis,10G\nAtta Thierry,Tigoue,10G\nAbed Alhameed,Al Ghabkari,11A\nAhmad,Al Ghabkari,11A\nMano Raghid,Amer,11A\nRayane,Bajjou,11A\nTim,Bernhard,11A\nJasper Bas,Bijvoets,11A\nLaurin,Blaka,11A\nLino Armando,Delmar,11A\nFay,Fischer,11A\nAminata,Gansagne,11A\nFijona,Gashi,11A\nSimon,Gölker,11A\nKarrar,Hadi,11A\nDaniil,Kirianchykov,11A\nArton,Malaj,11A\nMarko,Matejic,11A\nKhalid,Mohamudd Husen,11A\nFiona,Muslija,11A\nJulian Constantin,Nolte,11A\nErsin,Özbek,11A\nPamela,Palushi,11A\nLucian,Pitesa,11A\nLinda,Pritula,11A\nYasamin,Qurban Ali,11A\nKaday,Sillah,11A\nRomeo,Stanojevic,11A\nRuben Mika,Stoof,11A\nMichail,Tsatsis,11A\nMaxim,Zobel,11A\nAyat,Abdoulaye,11B\nSiban,Abdulrahman,11B\nBaker,Ali Ragab,11B\nMuhammad Nasri,Atik,11B\nAdrian,Bekir,11B\nLorik,Berisha,11B\nAdelio,D'Aniello,11B\nDiana Maria,Dinu,11B\nFatma,Djellouli,11B\nHa Chi,Do,11B\nRumeysa,Ekici,11B\nEliot,Halilaj,11B\nDitjon,Hodza,11B\nDženita,Husović,11B\nBerkay,Karakas,11B\nNikos,Karympov,11B\nDzhessika,Kim,11B\nAnna,Kirschner,11B\nDenisa,Maloku,11B\nAhmed Amine,Maskan,11B\nHusna,Mohad,11B\nTychique,Monginda,11B\nYalchan Aydin,Musa,11B\nAhmet Arda,Oguz,11B\nYusuf Enes,Öztürk,11B\nLina,Saoudy,11B\nManua,Shkrijelj,11B\nMelih,Yasar,11B\nLeoni Isabel,Aboussaidi,11C\nMatej,Adzaip,11C\nArsam,Ahmadian,11C\nChristian Solomon,Aigbiosa,11C\nHelena Ema,Andjic,11C\nHamidat,Apanpa,11C\nMarius Dhia,Arbo,11C\nMathius Dhia,Arbo,11C\nLuis Sebastian,Arroyo Moron,11C\nArda Alim,Aysan,11C\nAko,Babakerzadeh,11C\nMagdalena,Budimir,11C\nDario,Culjak,11C\nErbey Baris,Isik,11C\nMaximilian Karl,Kiefer,11C\nBorys Albin,Kozuch,11C\nMax,Meyer,11C\nKateryna,Petrovska,11C\nDaniel,Schubert,11C\nIlian,Sidiqi,11C\nElias Pele,Stuchlik,11C\nAlexandros,Theodoridis,11C\nRaul,Val Alonso,11C\nMario,Vorgic,11C\nMaximilian,Walter,11C\nJamie,Weber,11C\nLudwig Alexander,Weinheimer,11C\nAmelie Stina,Zachmann,11C\nAlea,Abazi,11D\nSawa,Abdel Aziz,11D\nHussam,Ahmed,11D\nHussein Habash Ahmed,Al Habash,11D\nSevil,Arap Chasim,11D\nFeres,Ben Fadhel,11D\nJoselynn Georgina,Böhmisch,11D\nIsabella,Dos Santos Dill,11D\nDavid,Forsch,11D\nArtiom,Ghejdevan,11D\nMark,Goldynski,11D\nBoris,Jasarevic,11D\nFarian,Kadri,11D\nAhmet,Kurtulus,11D\nKhaled,Mal-Ouro Tourebou,11D\nAhmar Awan,Muhammad,11D\nErfan,Niazi,11D\nSahar,Sediqi,11D\nEdin,Selmani,11D\nDiljot,Singh,11D\nSherin,Taher,11D\nSamihulla,Taufiq,11D\nGrigorios,Tersenidis,11D\nDaniil,Tonieiev,11D\nSasa,Valjarević,11D\nLara,Verep,11D\nTijana,Vujovic,11D\nArian,Zeka,11D";
+
+        function parseCSV(text) {
+            var lines = text.split('\n').filter(function(line) { return line.trim(); });
+            var classMap = {};
+            for (var i = 1; i < lines.length; i++) {
+                var values = lines[i].split(',').map(function(v) { return v.trim(); });
+                if (values.length >= 3) {
+                    var vorname = values[0];
+                    var familienname = values[1];
+                    var klasse = values[2];
+                    var fullName = vorname + ' ' + familienname;
+                    if (!classMap[klasse]) {
+                        classMap[klasse] = [];
+                    }
+                    classMap[klasse].push(fullName);
+                }
+            }
+            return classMap;
+        }
+
+        function getMonday(date) {
+            var d = new Date(date);
+            var day = d.getDay();
+            var diff = d.getDate() - day + (day === 0 ? -6 : 1);
+            return new Date(d.setDate(diff));
+        }
+
+        function extractClassFromTitle(title, classMap) {
+            if (!title) return null;
+
+            var normalizedTitle = title.replace(/\\,/g, ',');
+            var regexMatch = normalizedTitle.match(/\b(\d{1,2}\s?[A-Za-z])\b/);
+
+            if (regexMatch) {
+                var candidate = regexMatch[1].replace(/\s+/g, '').toUpperCase();
+                if (!classMap || classMap[candidate]) {
+                    return candidate;
+                }
+            }
+
+            if (classMap) {
+                var upperTitle = normalizedTitle.toUpperCase();
+                var classNames = Object.keys(classMap);
+                for (var i = 0; i < classNames.length; i++) {
+                    if (upperTitle.indexOf(classNames[i].toUpperCase()) !== -1) {
+                        return classNames[i];
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        function resolveClassForStudents(className, classMap) {
+            if (!className || !classMap) return null;
+            if (classMap[className]) return className;
+
+            var m = className.match(/^(\d{1,2})[A-Z]$/);
+            if (m) {
+                var zClass = m[1] + 'Z';
+                if (classMap[zClass]) return zClass;
+            }
+
+            return null;
+        }
+
+        function displayTodayOrdnungsdienst(events) {
+            var classMap = parseCSV(csvData);
+            var today = new Date();
+            today.setHours(0, 0, 0, 0);
+            var dayOfWeek = today.getDay();
+            
+            if (dayOfWeek === 0 || dayOfWeek === 6) {
+                return;
+            }
+            
+            var studentRotation = {};
+            Object.keys(classMap).forEach(function(className) {
+                studentRotation[className] = 20;
+            });
+
+            var todayOrdnung = null;
+            var missingClassForToday = null;
+            var days = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+            var todayName = days[dayOfWeek];
+            
+            events.forEach(function(event) {
+                if (event.title.toLowerCase().indexOf('ordnungsdienst') !== -1) {
+                    var monday = getMonday(event.start);
+                    monday.setHours(0, 0, 0, 0);
+                    var friday = new Date(monday);
+                    friday.setDate(friday.getDate() + 4);
+                    friday.setHours(23, 59, 59, 999);
+                    
+                    // Nur wenn dieses Event diese Woche ist, dann verarbeiten
+                    if (today >= monday && today <= friday) {
+                        var className = extractClassFromTitle(event.title, classMap);
+                        if (className) {
+                            var resolvedClass = resolveClassForStudents(className, classMap);
+                            
+                            if (resolvedClass) {
+                                var dayIndex = dayOfWeek - 1;
+                                var startIndex = studentRotation[resolvedClass];
+                                var todayStudents = [];
+                                
+                                for (var i = 0; i < 4; i++) {
+                                    var studentIndex = (startIndex + dayIndex * 4 + i) % classMap[resolvedClass].length;
+                                    todayStudents.push(classMap[resolvedClass][studentIndex]);
+                                }
+                                
+                                todayOrdnung = {
+                                    day: todayName,
+                                    date: today.getDate() + '.' + (today.getMonth() + 1) + '.',
+                                    class: resolvedClass,
+                                    calendarClass: className !== resolvedClass ? className : null,
+                                    students: todayStudents
+                                };
+                            } else {
+                                missingClassForToday = className;
+                            }
+                        }
+                    }
+                }
+            });
+            
+            var boxEl = document.getElementById('ordnungsdienst-box');
+            var todayDateStr = today.getDate() + '.' + (today.getMonth() + 1) + '.' + today.getFullYear();
+            var html = '<div class="title">📋 Ordnungsdienst ' + todayName + ', ' + todayDateStr + ':</div>';
+            
+            if (todayOrdnung) {
+                html += '<span class="class-name">' + todayOrdnung.class + '</span> - ';
+                if (todayOrdnung.calendarClass) {
+                    html += '<span style="opacity:0.9;">(Kalender: ' + todayOrdnung.calendarClass + ')</span> - ';
+                }
+                html += '<span class="students">' + todayOrdnung.students.join(', ') + '</span>';
+            } else if (missingClassForToday) {
+                html += '<span class="class-name">' + missingClassForToday + '</span> - Schülerliste für diese Klasse fehlt in der Datei';
+            } else {
+                html += 'Keine Daten für diese Woche vorhanden';
+            }
+            
+            boxEl.innerHTML = html;
+            boxEl.style.display = 'block';
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            var loadingEl = document.getElementById('loading');
+
+            if (typeof FullCalendar === 'undefined' || typeof ICAL === 'undefined') {
+                loadingEl.innerHTML = '⚠ Kalender-Bibliothek (cdn.jsdelivr.net) konnte nicht geladen werden.<br><small>Bitte cdn.jsdelivr.net in der Schul-Firewall freigeben.</small>';
+                logError('FATAL', 'FullCalendar oder ICAL.js ist undefined – CDN vermutlich blockiert.');
+                return;
+            }
+
+            try {
+            // Datum berechnen
+            var today = new Date();
+            today.setHours(0,0,0,0);
+            
+            // Nächster Montag berechnen
+            var day = today.getDay(); // 0=Sun, 1=Mon
+            var diffToNextMonday = (8 - day) % 7;
+            if (diffToNextMonday === 0) diffToNextMonday = 7; 
+            
+            var nextMonday = new Date(today);
+            nextMonday.setDate(today.getDate() + diffToNextMonday);
+            
+            // Montag danach (für das Ende der 2. Woche)
+            var nextNextMonday = new Date(nextMonday);
+            nextNextMonday.setDate(nextMonday.getDate() + 7);
+
+            // Helper to format date
+            function formatDate(d) {
+                return d.getDate() + '.' + (d.getMonth()+1) + '.';
+            }
+
+            // Calculate end dates for display (Sunday)
+            var sundayThisWeek = new Date(nextMonday);
+            sundayThisWeek.setDate(sundayThisWeek.getDate() - 1);
+
+            var sundayNextWeek = new Date(nextNextMonday);
+            sundayNextWeek.setDate(sundayNextWeek.getDate() - 1);
+
+            // Update Headers (robust: finde die ersten beiden .column unabhängig von der Ordnungsdienst-Box)
+            var columns = document.querySelectorAll('.container > .column');
+            if (columns.length >= 2) {
+                var h2_1 = columns[0].querySelector('h2');
+                var h2_2 = columns[1].querySelector('h2');
+                if (h2_1) h2_1.innerText = 'Diese Woche (' + formatDate(today) + ' - ' + formatDate(sundayThisWeek) + ')';
+                if (h2_2) h2_2.innerText = 'Nächste Woche (' + formatDate(nextMonday) + ' - ' + formatDate(sundayNextWeek) + ')';
+            }
+
+            // Kalender 1: Diese Woche (ab heute bis Sonntag)
+            var cal1El = document.getElementById('calendar-this-week');
+            var cal1 = new FullCalendar.Calendar(cal1El, {
+                initialView: 'listYear', // WICHTIG: listYear zeigt alle Events im validRange an
+                locale: 'de',
+                headerToolbar: false,
+                height: '100%',
+                noEventsContent: 'Heute keine Termine mehr 😊',
+                validRange: {
+                    start: today,
+                    end: nextMonday
+                },
+                eventClassNames: function(arg) {
+                    var classes = [];
+                    var d = arg.event.start;
+                    var now = new Date();
+                    
+                    // Today check
+                    if (d.getDate() === now.getDate() && 
+                        d.getMonth() === now.getMonth() && 
+                        d.getFullYear() === now.getFullYear()) {
+                        classes.push('today-event');
+                        
+                        // Past check (only for today)
+                        if (d < now) {
+                            classes.push('past-event');
+                        }
+                    }
+                    return classes;
+                },
+                events: function(info, success, failure) {
+                    loadAllEvents().then(function(events) {
+                        success(events);
+                    }).catch(failure);
+                },
+                eventsSet: function() {
+                    fitContent();
+                },
+                windowResize: function() {
+                    fitContent();
+                }
+            });
+
+            // Kalender 2: Nächste Woche (Montag bis Sonntag)
+            var cal2El = document.getElementById('calendar-next-week');
+            var cal2 = new FullCalendar.Calendar(cal2El, {
+                initialView: 'listYear', // WICHTIG: listYear zeigt alle Events im validRange an
+                locale: 'de',
+                headerToolbar: false,
+                height: '100%',
+                noEventsContent: 'Heute keine Termine mehr 😊',
+                validRange: {
+                    start: nextMonday,
+                    end: nextNextMonday
+                },
+                eventClassNames: function(arg) {
+                    var classes = [];
+                    var d = arg.event.start;
+                    var now = new Date();
+                    
+                    // Today check
+                    if (d.getDate() === now.getDate() && 
+                        d.getMonth() === now.getMonth() && 
+                        d.getFullYear() === now.getFullYear()) {
+                        classes.push('today-event');
+                        
+                        // Past check (only for today)
+                        if (d < now) {
+                            classes.push('past-event');
+                        }
+                    }
+                    return classes;
+                },
+                events: function(info, success, failure) {
+                    loadAllEvents().then(function(events) {
+                        success(events);
+                    }).catch(failure);
+                },
+                eventsSet: function() {
+                    fitContent();
+                },
+                windowResize: function() {
+                    fitContent();
+                }
+            });
+
+            loadingEl.style.display = 'block';
+
+            function showLoadFailure(err) {
+                logError("Fehler beim Laden:", err);
+                loadingEl.innerHTML = '⚠ Kalenderdaten konnten nicht geladen werden.<br><small>Proxy/Netzwerk vermutlich durch Schul-Firewall blockiert. Details unten.</small>';
+                loadingEl.style.display = 'block';
+            }
+
+            // Funktion zum Laden und Aktualisieren der Daten
+            function refreshCalendarData() {
+                // Cache leeren für frische Daten
+                cachedEvents = null;
+
+                loadAllEvents().then(function(events) {
+                    loadingEl.style.display = 'none';
+                    // Kalender mit neuen Events aktualisieren
+                    cal1.refetchEvents();
+                    cal2.refetchEvents();
+                    displayTodayOrdnungsdienst(events);
+                }).catch(showLoadFailure);
+            }
+
+            // Erst Daten laden, dann rendern
+            loadAllEvents().then(function(events) {
+                loadingEl.style.display = 'none';
+                cal1.render();
+                cal2.render();
+                displayTodayOrdnungsdienst(events);
+            }).catch(showLoadFailure);
+
+            // Auto-Refresh alle 5 Minuten (300000 ms)
+            setInterval(refreshCalendarData, 300000);
+            } catch (fatalErr) {
+                logError('FATAL beim Initialisieren', fatalErr);
+                loadingEl.innerHTML = '⚠ Fehler beim Initialisieren.<br><small>' + (fatalErr && fatalErr.message ? fatalErr.message : fatalErr) + '</small>';
+            }
+        });
+    </script>
+</body>
+</html>
