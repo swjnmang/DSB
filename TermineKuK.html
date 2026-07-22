@@ -505,12 +505,28 @@
                 loadingEl.style.display = 'block';
             }
 
+            // Funktion zum Laden und Aktualisieren der Daten
+            function refreshCalendarData() {
+                // Cache leeren für frische Daten
+                cachedEvents = null;
+
+                loadAllEvents().then(function() {
+                    loadingEl.style.display = 'none';
+                    // Kalender mit neuen Events aktualisieren
+                    cal1.refetchEvents();
+                    cal2.refetchEvents();
+                }).catch(showLoadFailure);
+            }
+
             // Erst Daten laden, dann rendern
             loadAllEvents().then(function() {
                 loadingEl.style.display = 'none';
                 cal1.render();
                 cal2.render();
             }).catch(showLoadFailure);
+
+            // Auto-Refresh alle 5 Minuten (300000 ms)
+            setInterval(refreshCalendarData, 300000);
             } catch (fatalErr) {
                 logError('FATAL beim Initialisieren', fatalErr);
                 loadingEl.innerHTML = '⚠ Fehler beim Initialisieren.<br><small>' + (fatalErr && fatalErr.message ? fatalErr.message : fatalErr) + '</small>';
