@@ -38,6 +38,10 @@ Umstieg von ICS-Export + ical.js-Parsing + Proxy-Kaskade auf die
   ablehnen.
 
 ## Layout / Ordnungsdienst-Logik
-Bewusst unverändert gelassen: komplettes CSS/Layout sowie `csvData`, `parseCSV`,
-`getMonday`, `extractClassFromTitle`, `resolveClassForStudents`,
-`displayTodayOrdnungsdienst` in TermineSuS.html.
+Bewusst unverändert gelassen: komplettes CSS/Layout in TermineSuS.html.
+
+Die Ordnungsdienst-Klassenzuordnung basiert nicht mehr auf Kalender-Titel-
+Parsing + Schüler-CSV, sondern auf einem festen Zeitplan `ordnungsdienstZeitplan`
+(Kalenderwoche -> Klasse) gemäß dem Aushang der Schule. Siehe `getISOWeek` und
+`displayTodayOrdnungsdienst` in TermineSuS.html. Schülernamen werden nicht mehr
+angezeigt.
