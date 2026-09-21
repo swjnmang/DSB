@@ -426,148 +426,52 @@
         }
 
         // === ORDNUNGSDIENST LOGIK ===
-        var csvData = "Vorname,Familienname,Klasse";
+        // Zeitplan laut Aushang "Staatliche Dieter-Hildebrandt Wirtschaftsschule München" –
+        // Kalenderwoche (ISO/KW) -> zuständige Klasse. null = Ferien / keine Zuteilung.
+        var ordnungsdienstZeitplan = {
+            38: '11A', 39: '11B', 40: '11C',
+            41: '11D', 42: null /* 11E entfällt lt. Aushang */, 43: '10A', 44: '10B',
+            45: null /* Herbstferien */, 46: '10C', 47: '10D', 48: '10E', 49: '10F',
+            50: '10G', 51: '10A', 52: '10B', 53: null /* Weihnachtsferien */,
+            1: null /* Weihnachtsferien */, 2: '10C', 3: '10D', 4: '10E',
+            5: '10F', 6: null /* Faschingsferien */, 7: '10G', 8: '11A',
+            9: '11B', 10: '11C', 11: '11D', 12: null /* Osterferien */, 13: null /* Osterferien */,
+            14: '11E', 15: '10A', 16: '10B', 17: '10C',
+            18: '10D', 19: '10E', 20: null /* Pfingstferien */, 21: null /* Pfingstferien */,
+            22: '10F', 23: '10G', 24: '10A', 25: '10B', 26: '10C',
+            27: '10D', 28: '10E', 29: '10F', 30: '10G'
+        };
 
-        function parseCSV(text) {
-            var lines = text.split('\n').filter(function(line) { return line.trim(); });
-            var classMap = {};
-            for (var i = 1; i < lines.length; i++) {
-                var values = lines[i].split(',').map(function(v) { return v.trim(); });
-                if (values.length >= 3) {
-                    var vorname = values[0];
-                    var familienname = values[1];
-                    var klasse = values[2];
-                    var fullName = vorname + ' ' + familienname;
-                    if (!classMap[klasse]) {
-                        classMap[klasse] = [];
-                    }
-                    classMap[klasse].push(fullName);
-                }
-            }
-            return classMap;
-        }
-
-        function getMonday(date) {
-            var d = new Date(date);
-            var day = d.getDay();
-            var diff = d.getDate() - day + (day === 0 ? -6 : 1);
-            return new Date(d.setDate(diff));
-        }
-
-        function extractClassFromTitle(title, classMap) {
-            if (!title) return null;
-
-            var normalizedTitle = title.replace(/\\,/g, ',');
-            var regexMatch = normalizedTitle.match(/\b(\d{1,2}\s?[A-Za-z])\b/);
-
-            if (regexMatch) {
-                var candidate = regexMatch[1].replace(/\s+/g, '').toUpperCase();
-                if (!classMap || classMap[candidate]) {
-                    return candidate;
-                }
-            }
-
-            if (classMap) {
-                var upperTitle = normalizedTitle.toUpperCase();
-                var classNames = Object.keys(classMap);
-                for (var i = 0; i < classNames.length; i++) {
-                    if (upperTitle.indexOf(classNames[i].toUpperCase()) !== -1) {
-                        return classNames[i];
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        function resolveClassForStudents(className, classMap) {
-            if (!className || !classMap) return null;
-            if (classMap[className]) return className;
-
-            var m = className.match(/^(\d{1,2})[A-Z]$/);
-            if (m) {
-                var zClass = m[1] + 'Z';
-                if (classMap[zClass]) return zClass;
-            }
-
-            return null;
+        function getISOWeek(date) {
+            var d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+            var dayNum = d.getUTCDay() || 7;
+            d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+            var yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+            return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
         }
 
         function displayTodayOrdnungsdienst(events) {
-            var classMap = parseCSV(csvData);
             var today = new Date();
             today.setHours(0, 0, 0, 0);
             var dayOfWeek = today.getDay();
-            
+
             if (dayOfWeek === 0 || dayOfWeek === 6) {
                 return;
             }
-            
-            var studentRotation = {};
-            Object.keys(classMap).forEach(function(className) {
-                studentRotation[className] = 20;
-            });
 
-            var todayOrdnung = null;
-            var missingClassForToday = null;
+            var klasse = ordnungsdienstZeitplan[getISOWeek(today)];
+            if (!klasse) {
+                return;
+            }
+
             var days = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
             var todayName = days[dayOfWeek];
-            
-            events.forEach(function(event) {
-                if (event.title.toLowerCase().indexOf('ordnungsdienst') !== -1) {
-                    var monday = getMonday(event.start);
-                    monday.setHours(0, 0, 0, 0);
-                    var friday = new Date(monday);
-                    friday.setDate(friday.getDate() + 4);
-                    friday.setHours(23, 59, 59, 999);
-                    
-                    // Nur wenn dieses Event diese Woche ist, dann verarbeiten
-                    if (today >= monday && today <= friday) {
-                        var className = extractClassFromTitle(event.title, classMap);
-                        if (className) {
-                            var resolvedClass = resolveClassForStudents(className, classMap);
-                            
-                            if (resolvedClass) {
-                                var dayIndex = dayOfWeek - 1;
-                                var startIndex = studentRotation[resolvedClass];
-                                var todayStudents = [];
-                                
-                                for (var i = 0; i < 4; i++) {
-                                    var studentIndex = (startIndex + dayIndex * 4 + i) % classMap[resolvedClass].length;
-                                    todayStudents.push(classMap[resolvedClass][studentIndex]);
-                                }
-                                
-                                todayOrdnung = {
-                                    day: todayName,
-                                    date: today.getDate() + '.' + (today.getMonth() + 1) + '.',
-                                    class: resolvedClass,
-                                    calendarClass: className !== resolvedClass ? className : null,
-                                    students: todayStudents
-                                };
-                            } else {
-                                missingClassForToday = className;
-                            }
-                        }
-                    }
-                }
-            });
-            
-            var boxEl = document.getElementById('ordnungsdienst-box');
             var todayDateStr = today.getDate() + '.' + (today.getMonth() + 1) + '.' + today.getFullYear();
+
+            var boxEl = document.getElementById('ordnungsdienst-box');
             var html = '<div class="title">📋 Ordnungsdienst ' + todayName + ', ' + todayDateStr + ':</div>';
-            
-            if (todayOrdnung) {
-                html += '<span class="class-name">' + todayOrdnung.class + '</span> - ';
-                if (todayOrdnung.calendarClass) {
-                    html += '<span style="opacity:0.9;">(Kalender: ' + todayOrdnung.calendarClass + ')</span> - ';
-                }
-                html += '<span class="students">' + todayOrdnung.students.join(', ') + '</span>';
-            } else if (missingClassForToday) {
-                html += '<span class="class-name">' + missingClassForToday + '</span> - Schülerliste für diese Klasse fehlt in der Datei';
-            } else {
-                html += 'Keine Daten für diese Woche vorhanden';
-            }
-            
+            html += '<span class="class-name">' + klasse + '</span>';
+
             boxEl.innerHTML = html;
             boxEl.style.display = 'block';
         }
