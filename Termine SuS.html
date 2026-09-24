@@ -493,42 +493,64 @@
             }
 
             try {
-            // Datum berechnen
-            var today = new Date();
-            today.setHours(0,0,0,0);
-            
-            // Nächster Montag berechnen
-            var day = today.getDay(); // 0=Sun, 1=Mon
-            var diffToNextMonday = (8 - day) % 7;
-            if (diffToNextMonday === 0) diffToNextMonday = 7; 
-            
-            var nextMonday = new Date(today);
-            nextMonday.setDate(today.getDate() + diffToNextMonday);
-            
-            // Montag danach (für das Ende der 2. Woche)
-            var nextNextMonday = new Date(nextMonday);
-            nextNextMonday.setDate(nextMonday.getDate() + 7);
-
             // Helper to format date
             function formatDate(d) {
                 return d.getDate() + '.' + (d.getMonth()+1) + '.';
             }
 
-            // Calculate end dates for display (Sunday)
-            var sundayThisWeek = new Date(nextMonday);
-            sundayThisWeek.setDate(sundayThisWeek.getDate() - 1);
+            // Berechnet die Wochengrenzen neu (heute, nächster Montag, übernächster Montag).
+            // Wird beim Start UND bei jedem Auto-Refresh aufgerufen, damit die Anzeige
+            // "mitwandert", wenn der Bildschirm über Mitternacht hinaus geöffnet bleibt
+            // (ohne Neuberechnung würde "Diese Woche" sonst in die Vergangenheit rutschen).
+            function computeDateRanges() {
+                var today = new Date();
+                today.setHours(0,0,0,0);
 
-            var sundayNextWeek = new Date(nextNextMonday);
-            sundayNextWeek.setDate(sundayNextWeek.getDate() - 1);
+                // Nächster Montag berechnen
+                var day = today.getDay(); // 0=Sun, 1=Mon
+                var diffToNextMonday = (8 - day) % 7;
+                if (diffToNextMonday === 0) diffToNextMonday = 7;
 
-            // Update Headers (robust: finde die ersten beiden .column unabhängig von der Ordnungsdienst-Box)
-            var columns = document.querySelectorAll('.container > .column');
-            if (columns.length >= 2) {
-                var h2_1 = columns[0].querySelector('h2');
-                var h2_2 = columns[1].querySelector('h2');
-                if (h2_1) h2_1.innerText = 'Diese Woche (' + formatDate(today) + ' - ' + formatDate(sundayThisWeek) + ')';
-                if (h2_2) h2_2.innerText = 'Nächste Woche (' + formatDate(nextMonday) + ' - ' + formatDate(sundayNextWeek) + ')';
+                var nextMonday = new Date(today);
+                nextMonday.setDate(today.getDate() + diffToNextMonday);
+
+                // Montag danach (für das Ende der 2. Woche)
+                var nextNextMonday = new Date(nextMonday);
+                nextNextMonday.setDate(nextMonday.getDate() + 7);
+
+                // Calculate end dates for display (Sunday)
+                var sundayThisWeek = new Date(nextMonday);
+                sundayThisWeek.setDate(sundayThisWeek.getDate() - 1);
+
+                var sundayNextWeek = new Date(nextNextMonday);
+                sundayNextWeek.setDate(sundayNextWeek.getDate() - 1);
+
+                return {
+                    today: today,
+                    nextMonday: nextMonday,
+                    nextNextMonday: nextNextMonday,
+                    sundayThisWeek: sundayThisWeek,
+                    sundayNextWeek: sundayNextWeek
+                };
             }
+
+            function updateHeaders(ranges) {
+                // robust: finde die ersten beiden .column unabhängig von der Ordnungsdienst-Box
+                var columns = document.querySelectorAll('.container > .column');
+                if (columns.length >= 2) {
+                    var h2_1 = columns[0].querySelector('h2');
+                    var h2_2 = columns[1].querySelector('h2');
+                    if (h2_1) h2_1.innerText = 'Diese Woche (' + formatDate(ranges.today) + ' - ' + formatDate(ranges.sundayThisWeek) + ')';
+                    if (h2_2) h2_2.innerText = 'Nächste Woche (' + formatDate(ranges.nextMonday) + ' - ' + formatDate(ranges.sundayNextWeek) + ')';
+                }
+            }
+
+            var dateRanges = computeDateRanges();
+            var today = dateRanges.today;
+            var nextMonday = dateRanges.nextMonday;
+            var nextNextMonday = dateRanges.nextNextMonday;
+
+            updateHeaders(dateRanges);
 
             // Kalender 1: Diese Woche (ab heute bis Sonntag)
             var cal1El = document.getElementById('calendar-this-week');
@@ -628,6 +650,13 @@
             function refreshCalendarData() {
                 // Cache leeren für frische Daten
                 cachedEvents = null;
+
+                // Wochengrenzen neu berechnen, damit die Anzeige über Mitternacht
+                // hinweg korrekt "weiterblättert" (siehe computeDateRanges).
+                var ranges = computeDateRanges();
+                updateHeaders(ranges);
+                cal1.setOption('validRange', { start: ranges.today, end: ranges.nextMonday });
+                cal2.setOption('validRange', { start: ranges.nextMonday, end: ranges.nextNextMonday });
 
                 loadAllEvents().then(function(events) {
                     loadingEl.style.display = 'none';
